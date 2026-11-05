@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AuditTrap</title>
+<style>
+body { background: #101720; color: #eff5fc; font: 16px/1.6 system-ui, sans-serif; margin: 0; }
+main { max-width: 860px; margin: auto; padding: 3rem 1.25rem; }
+h1 { font-size: clamp(2.6rem, 8vw, 5rem); margin: 0; line-height: 1; }
+small, a { color: #8ce9d1; }
+form, article { border: 1px solid #384955; border-radius: 12px; background: #18232d; padding: 1rem; }
+label { display: block; }
+input, select, button { box-sizing: border-box; font: inherit; padding: .45rem; border-radius: 6px; }
+input, select { color: inherit; background: #101720; border: 1px solid #647682; width: 100%; }
+button { background: #8ce9d1; color: #101720; border: 0; font-weight: 700; margin-top: 1rem; cursor: pointer; }
+button:disabled { opacity: .5; cursor: wait; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); gap: .75rem; }
+form .grid { margin-top: .75rem; }
+article h2 { margin: 0; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+<small>PROMPT INJECTION LAB</small>
+<h1>AuditTrap</h1>
+<p>Can a document talk an AI auditor into passing a failed control? Run the same evidence through both audit modes and inspect their citations.</p>
+<form id="audit">
+  <label>Example <select id="example"></select></label>
+  <label>Audit question <input id="question" required maxlength="500"></label>
+  <div class="grid">
+    <label>Evidence <select id="corpus"><option value="poisoned">Poisoned</option><option value="clean">Clean</option></select></label>
+    <label>Backend <select id="backend"><option value="demo">Offline simulation</option><option value="ollama">Ollama model</option></select></label>
+  </div>
+  <button id="run">Compare verdicts</button>
+</form>
+<p id="status" role="status"></p>
+<section id="results" class="grid" aria-label="Audit results"></section>
+<p><a href="/docs">API documentation</a></p>
+</main>
+<script>
+const byId = id => document.getElementById(id);
+const example = byId("example");
+const question = byId("question");
+const status = byId("status");
+const results = byId("results");
+const run = byId("run");
+
+async function loadExamples() {
+  const response = await fetch("/audit/cases");
+  if (!response.ok) throw new Error("Could not load examples.");
+  for (const item of await response.json()) {
+    example.add(new Option(item.id + (item.has_attack ? " (attack available)" : ""), item.question));
+  }
+  question.value = example.value;
+}
+example.addEventListener("change", () => { question.value = example.value; });
+loadExamples().catch(error => { status.textContent = error.message; });
+
+function show(mode, result) {
+  const card = document.createElement("article");
+  const title = document.createElement("h2");
+  title.textContent = mode === "baseline" ? "Baseline" : "Hardened";
+  const verdict = document.createElement("strong");
+  verdict.textContent = result.verdict.replaceAll("_", " ").toUpperCase();
+  const citations = document.createElement("ul");
+  for (const citation of result.citations) {
+    const item = document.createElement("li");
+    item.textContent = citation.id + " — " + citation.quote;
+    citations.append(item);
+  }
+  const details = document.createElement("details");
+  const label = document.createElement("summary");
+  label.textContent = "Retrieved evidence";
+  const evidence = document.createElement("pre");
+  evidence.textContent = result.retrieved_passages.map(p => p.id + " — " + p.text).join("\n\n");
+  details.append(label, evidence);
+  card.append(title, verdict, citations, details);
+  results.append(card);
+}
+
+byId("audit").addEventListener("submit", async event => {
+  event.preventDefault();
+  run.disabled = true;
+  results.replaceChildren();
+  const request = {question: question.value, corpus: byId("corpus").value, backend: byId("backend").value};
+  status.textContent = "Running both checks…";
+  try {
+    for (const mode of ["baseline", "hardened"]) {
+      const response = await fetch("/audit/check", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({...request, mode})
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check your input.");
+      show(mode, data);
+    }
+    status.textContent = request.backend === "demo" ? "Offline simulation complete." : "Ollama comparison complete.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    run.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
